@@ -77,7 +77,8 @@ services:
 
   worker:
     <<: *php
-    command: ["php", "artisan", "queue:work", "--tries=3", "--backoff=5"]
+    # All queues in priority order, from the backend's config/queue.php (queues:work).
+    command: ["php", "artisan", "queues:work"]
 
   scheduler:
     <<: *php
