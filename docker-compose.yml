@@ -18,9 +18,8 @@ x-php: &php
   image: mediconnect-php:local
   volumes:
     - ${BACKEND_PATH:-../backend}:/var/www/backend
-  env_file:
-    - path: ${BACKEND_PATH:-../backend}/.env
-      required: false
+  # No env_file: Laravel reads backend/.env itself. Injecting it as container
+  # environment would override phpunit.xml and point tests at the dev database.
   depends_on:
     postgres: { condition: service_healthy }
     redis: { condition: service_healthy }
