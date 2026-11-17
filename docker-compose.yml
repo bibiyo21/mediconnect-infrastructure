@@ -18,6 +18,8 @@ x-php: &php
   image: mediconnect-php:local
   volumes:
     - ${BACKEND_PATH:-../backend}:/var/www/backend
+    # Read-only docs for tests that check code against the approved documents.
+    - ${DOCS_PATH:-..}/docs:/var/www/docs:ro
   # No env_file: Laravel reads backend/.env itself. Injecting it as container
   # environment would override phpunit.xml and point tests at the dev database.
   depends_on:
