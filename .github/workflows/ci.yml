@@ -1,0 +1,31 @@
+# Validates the local Docker Compose file (syntax, anchors, profiles).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: docker compose config
+        env:
+          POSTGRES_SUPERUSER_PASSWORD: ci
+          DB_OWNER_PASSWORD: ci
+          DB_APP_PASSWORD: ci
+        run: |
+          docker compose config --quiet
+          docker compose --profile search --profile realtime config --quiet
+      - name: Shell scripts parse
+        run: sh -n docker/postgres/init/01-roles.sh
