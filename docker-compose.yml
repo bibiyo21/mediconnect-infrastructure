@@ -1,9 +1,8 @@
 # MediConnect local environment (LOCAL only — not a production manifest).
 # Run from the mediconnect-infrastructure repo. Expects mediconnect-backend checked out
 # next to it (../backend), or set BACKEND_PATH in .env.
-# Default services: postgres, redis, mailpit, seaweedfs (+ storage-init), clamav, api, worker, scheduler.
+# Default services: postgres, redis, mailpit, seaweedfs (+ storage-init), clamav, typesense, api, worker, scheduler.
 # Optional profiles (not needed in Phase 1, keep RAM free on small machines):
-#   --profile search    typesense   (Phase 3)
 #   --profile realtime  reverb      (enabled once Reverb is installed)
 # Private uploads (doctor credentials, Phase 2) go to SeaweedFS, an S3-compatible store (D-36),
 # and are scanned by ClamAV before anyone can download them (D-07). ClamAV needs about
@@ -109,12 +108,18 @@ services:
       start_period: 300s
       retries: 10
 
+  # Search engine (Phase 3, architecture.md §12). Only the API talks to it: no CORS, and the
+  # admin key stays server-side. PostgreSQL remains the source of truth; the index is rebuilt from it.
   typesense:
-    profiles: [search]
     image: typesense/typesense:30.0
-    command: ["--data-dir", "/data", "--api-key", "${TYPESENSE_API_KEY:-local-dev-key}", "--enable-cors"]
+    command: ["--data-dir", "/data", "--api-key", "${TYPESENSE_API_KEY:?set in .env}"]
     volumes: [typesensedata:/data]
     ports: ["127.0.0.1:8108:8108"]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8108 && printf \"GET /health HTTP/1.0\\r\\n\\r\\n\" >&3 && grep -q ok <&3'"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
 
   api:
     <<: *php

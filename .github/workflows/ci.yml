@@ -25,6 +25,7 @@ jobs:
           DB_OWNER_PASSWORD: ci
           DB_APP_PASSWORD: ci
           S3_SECRET_KEY: ci
+          TYPESENSE_API_KEY: ci
         run: |
           docker compose config --quiet
           docker compose --profile search --profile realtime config --quiet
