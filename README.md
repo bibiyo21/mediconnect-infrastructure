@@ -25,11 +25,12 @@ k6 scripts for the search performance baseline (Phase 3, increment 3.7) live in 
 docker compose exec api php artisan perf:dataset          # 10,000 synthetic doctors, 2,000 locations
 docker compose exec api php artisan search:rebuild all
 docker run --rm --network mediconnect_default -v "$PWD/load-tests:/scripts:ro" -e MINUTES=10 grafana/k6:1.3.0 run /scripts/search.js
+docker run --rm --network mediconnect_default -v "$PWD/load-tests:/scripts:ro" -e MINUTES=5 -e RUN=control grafana/k6:1.3.0 run /scripts/search.js
 docker compose exec api php artisan search:index-latency --samples=20
 docker run --rm --network mediconnect_default -v "$PWD/load-tests:/scripts:ro" grafana/k6:1.3.0 run /scripts/typing.js
 docker compose exec api php artisan perf:dataset --remove && docker compose exec api php artisan search:rebuild all
 ```
 
-- `search.js` stays under the shared 60-a-minute search rate limit (50 a minute), so it measures latency at low load, not throughput. It does not spoof addresses or relax the limit. Samples are split by the API's `meta.cache_hit`; any 429, non-200 or degraded answer fails the run.
+- `search.js` stays under the shared 60-a-minute search rate limit (50 a minute), so it measures latency at low load, not throughput. It does not spoof addresses or relax the limit. Samples are split by the API's `meta.cache_hit`; any 429, non-200 or degraded answer fails the run. `RUN=control` times `/health` alone; run it separately, because the local API serves one request at a time.
 - `typing.js` shows how many typing pauses (two requests each) one patient gets before the limit answers 429. Wait a minute after another run so the bucket starts empty.
 - Run one thing at a time, and nothing else heavy on the machine. Results and their limits are recorded in `mediconnect-docs/docs/performance-testing.md`.
