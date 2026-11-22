@@ -3,7 +3,7 @@
 # next to it (../backend), or set BACKEND_PATH in .env.
 # Default services: postgres, redis, mailpit, seaweedfs (+ storage-init), clamav, typesense, api, worker, scheduler.
 # Optional profiles (not needed in Phase 1, keep RAM free on small machines):
-#   --profile realtime  reverb      (enabled once Reverb is installed)
+#   --profile realtime  reverb      (Laravel Reverb, installed in Phase 5; see backend/README.md)
 # Private uploads (doctor credentials, Phase 2) go to SeaweedFS, an S3-compatible store (D-36),
 # and are scanned by ClamAV before anyone can download them (D-07). ClamAV needs about
 # 1-1.5 GB of RAM and downloads its virus signatures on first start (a few minutes).
