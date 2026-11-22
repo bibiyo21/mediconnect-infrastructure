@@ -34,3 +34,14 @@ docker compose exec api php artisan perf:dataset --remove && docker compose exec
 - `search.js` stays under the shared 60-a-minute search rate limit (50 a minute), so it measures latency at low load, not throughput. It does not spoof addresses or relax the limit. Samples are split by the API's `meta.cache_hit`; any 429, non-200 or degraded answer fails the run. `RUN=control` times `/health` alone; run it separately, because the local API serves one request at a time.
 - `typing.js` shows how many typing pauses (two requests each) one patient gets before the limit answers 429. Wait a minute after another run so the bucket starts empty.
 - Run one thing at a time, and nothing else heavy on the machine. Results and their limits are recorded in `mediconnect-docs/docs/performance-testing.md`.
+
+## Real-time termination check (LOCAL only)
+
+`scripts/reverb-terminate-check.sh` proves against a real Reverb that ending a user's authorization closes their WebSocket (Phase 5, increment 5.4b, M-3). The Pest tests use a fake Pusher client and only prove when and how often the terminate call is made; this script proves that the socket really closes.
+
+```bash
+docker compose up -d postgres redis
+./scripts/reverb-terminate-check.sh
+```
+
+It rebuilds the **test** database (`mediconnect_test`; a `TEST_DB` name that does not end in `_test` is refused), starts throw-away `mc-reverb-check-*` containers for the API (PHP built-in server) and Reverb with their own random Reverb keys, in-memory cache and sessions, and `QUEUE_CONNECTION=sync`, then runs `scripts/reverb-terminate-check.mjs` on the host (Node 22+, no dependencies). The script signs a user in, joins `presence-user.{id}` through `/broadcasting/auth`, checks the socket stays open for 3 seconds, logs out, and asserts the socket closes and the revoked token can no longer sign the channel. The containers are removed on exit (`KEEP=1` leaves them for inspection). The development database, Redis and the normal `api` and `reverb` services are not touched.
