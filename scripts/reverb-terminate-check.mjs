@@ -110,6 +110,102 @@ check('socket CLOSED after logout', closedAt !== null, closedAt ? `${closedAt - 
 const again = await post('/broadcasting/auth', { socket_id: socketId, channel_name: channel }, token);
 check('revoked token cannot sign the channel again', again.status === 401, `status ${again.status}`);
 
+
+// ---------------------------------------------------------------------------------------------
+// 8. Sweep checks (increment 5.6-0). They need RECONCILE_CMD and EXPIRE_CMD (set by the .sh): shell
+//    commands that run `php artisan realtime:reconcile` and expire the check user's credentials in
+//    the same throw-away environment. Skipped, not failed, when they are absent.
+// ---------------------------------------------------------------------------------------------
+import { execSync } from 'node:child_process';
+
+// Only the exit status is printed: the first line of an execSync error is the command itself, which holds REVERB_APP_SECRET.
+function run(cmd) {
+  try { execSync(cmd, { stdio: 'pipe', cwd: process.cwd(), timeout: 120000 }); return true; } catch (e) { console.log(`command failed (exit status ${e.status ?? 'unknown'})`); return false; }
+}
+
+async function signInAndConnect(label) {
+  const res = await post('/auth/login', { identifier: EMAIL, password: PASSWORD, device: { platform: 'IOS', name: label } });
+  const tok = (await json(res))?.data?.tokens?.access_token;
+  const sock = new WebSocket(`${WS}/app/${KEY}?protocol=7&client=${label}&version=1.0&flash=false`);
+  const state = { sock, tok, messages: [], closed: false, socketId: null };
+  sock.addEventListener('message', (e) => { const m = JSON.parse(e.data); state.messages.push(m); });
+  sock.addEventListener('close', () => { state.closed = true; });
+  const until = Date.now() + 5000;
+  while (!state.socketId && Date.now() < until) {
+    const hit = state.messages.find((m) => m.event === 'pusher:connection_established');
+    if (hit) state.socketId = JSON.parse(hit.data).socket_id;
+    else await sleep(100);
+  }
+  return state;
+}
+
+async function signChannel(state) {
+  const ch = `presence-user.${userId}`;
+  const a = await json(await post('/broadcasting/auth', { socket_id: state.socketId, channel_name: ch }, state.tok));
+  return { ch, a };
+}
+
+function subscribe(state, { ch, a }) {
+  state.sock.send(JSON.stringify({ event: 'pusher:subscribe', data: { auth: a.auth, channel: ch, channel_data: a.channel_data } }));
+}
+
+async function waitClosed(state, ms) {
+  const until = Date.now() + ms;
+  while (!state.closed && Date.now() < until) await sleep(100);
+  return state.closed;
+}
+
+if (!process.env.RECONCILE_CMD || !process.env.EXPIRE_CMD || !process.env.WEB_DEVICE_CMD) {
+  console.log('SKIP  sweep checks (RECONCILE_CMD, EXPIRE_CMD and WEB_DEVICE_CMD not all set)');
+} else {
+  // (a) stale signature: fetched BEFORE a logout (which terminates the user), used AFTER it. Reverb's
+  //     terminate cannot reach the socket (it had no user id when it was terminated), so the socket
+  //     subscribes and stays open until the sweep closes it. The user has no live credential then.
+  const a = await signInAndConnect('stale-signature');
+  check('stale-signature: signed in and connected', Boolean(a.tok && a.socketId));
+  const signature = await signChannel(a);
+  check('stale-signature: signature obtained before the logout', Boolean(signature.a.auth));
+  await post('/auth/logout', {}, a.tok);
+  await sleep(1000);
+  const aStillOpen = !a.closed;
+  subscribe(a, signature);
+  const joined = await (async () => { const until = Date.now() + 5000; while (Date.now() < until) { if (a.messages.some((m) => m.event === 'pusher_internal:subscription_succeeded')) return true; await sleep(100); } return false; })();
+  check('stale-signature: the old signature still subscribes after the logout (the residual risk L-a)', joined && aStillOpen, `open=${aStillOpen} joined=${joined}`);
+  check('stale-signature: reconcile command ran', run(process.env.RECONCILE_CMD));
+  check('stale-signature: the sweep CLOSED the socket', await waitClosed(a, 8000));
+
+  // (b) expired credential: nothing revokes anything; the access and refresh tokens simply expire.
+  const b = await signInAndConnect('expired-credential');
+  check('expired-credential: signed in and connected', Boolean(b.tok && b.socketId));
+  subscribe(b, await signChannel(b));
+  const bJoined = await (async () => { const until = Date.now() + 5000; while (Date.now() < until) { if (b.messages.some((m) => m.event === 'pusher_internal:subscription_succeeded')) return true; await sleep(100); } return false; })();
+  check('expired-credential: subscribed', bJoined);
+  check('expired-credential: sweep keeps a user with a live credential', run(process.env.RECONCILE_CMD) && (await sleep(2000), !b.closed));
+  check('expired-credential: credentials expired in the database', run(process.env.EXPIRE_CMD));
+  check('expired-credential: reconcile command ran', run(process.env.RECONCILE_CMD));
+  check('expired-credential: the sweep CLOSED the socket', await waitClosed(b, 8000));
+
+  // (c) a token sign-in without a platform is refused (it could otherwise pose as a browser device).
+  const noPlatform = await post('/auth/login', { identifier: EMAIL, password: PASSWORD });
+  check('no-platform: a token login without device.platform is refused', noPlatform.status === 422, `status ${noPlatform.status}`);
+
+  // (d) WEB device: the user holds no token; only a browser device row decides. Stale (3 h) is closed, fresh is kept.
+  const c = await signInAndConnect('web-device');
+  const cSignature = await signChannel(c);
+  await post('/auth/logout', {}, c.tok); // no token credential left
+  await sleep(1000);
+  subscribe(c, cSignature);
+  await sleep(1500);
+  check('web-device: stale-signature socket subscribed and open', !c.closed && c.messages.some((m) => m.event === 'pusher_internal:subscription_succeeded'));
+  check('web-device: fresh WEB device inserted', run(process.env.WEB_DEVICE_CMD.replace('__MIN__', '0')));
+  check('web-device: reconcile ran', run(process.env.RECONCILE_CMD));
+  await sleep(2000);
+  check('web-device: fresh WEB device keeps the socket', !c.closed);
+  check('web-device: WEB device aged to 3 hours', run(process.env.WEB_DEVICE_CMD.replace('__MIN__', '180')));
+  check('web-device: reconcile ran again', run(process.env.RECONCILE_CMD));
+  check('web-device: stale WEB device CLOSED the socket', await waitClosed(c, 8000));
+}
+
 try { socket.close(); } catch { /* already closed */ }
 console.log(failed === 0 ? '\nALL CHECKS PASSED' : `\n${failed} CHECK(S) FAILED`);
 process.exit(failed === 0 ? 0 : 1);

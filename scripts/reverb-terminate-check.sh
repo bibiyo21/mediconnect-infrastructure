@@ -59,6 +59,15 @@ for i in $(seq 1 40); do
 done
 if [ "$ready" -ne 1 ]; then echo "The API or Reverb did not become ready within 40 seconds." >&2; exit 1; fi
 
+# Sweep checks (increment 5.6-0): run `realtime:reconcile` and expire the check user's credentials in the same throw-away environment.
+ENV_FLAGS="$(printf '%q ' "${ENV_ARGS[@]}")"
+export RECONCILE_CMD="docker compose run --rm $ENV_FLAGS api php artisan realtime:reconcile"
+export EXPIRE_CMD="docker compose run --rm $ENV_FLAGS api php artisan tinker --execute=\"Illuminate\\Support\\Facades\\DB::table('personal_access_tokens')->where('tokenable_id', '$USER_ID')->update(['expires_at' => now()->subMinute()]); Illuminate\\Support\\Facades\\DB::table('auth_refresh_tokens')->whereIn('user_device_id', Illuminate\\Support\\Facades\\DB::table('user_devices')->where('user_id', '$USER_ID')->pluck('id'))->update(['expires_at' => now()->subMinute()]);\""
+
+# Replaces the check user's WEB device with one last seen __MIN__ minutes ago (the script fills in __MIN__).
+WEB_PHP="Illuminate\\\\Support\\\\Facades\\\\DB::table('user_devices')->where('user_id', '$USER_ID')->where('platform', 'WEB')->delete(); Illuminate\\\\Support\\\\Facades\\\\DB::table('user_devices')->insert(['id' => (string) Illuminate\\\\Support\\\\Str::uuid(), 'user_id' => '$USER_ID', 'platform' => 'WEB', 'last_seen_at' => now()->subMinutes(__MIN__), 'created_at' => now(), 'updated_at' => now()]);"
+export WEB_DEVICE_CMD="docker compose run --rm $ENV_FLAGS api php artisan tinker --execute=\"$WEB_PHP\""
+
 echo "== Running the check"
 API_URL="http://127.0.0.1:$API_PORT/api/v1" WS_URL="ws://127.0.0.1:$WS_PORT" \
   REVERB_APP_KEY="$APP_KEY_VALUE" CHECK_EMAIL="$EMAIL" CHECK_PASSWORD="$PASSWORD" \
